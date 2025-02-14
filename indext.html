@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SOCIAL LUCK</title>
+  <!-- Ethers.js -->
+  <script src="https://cdn.jsdelivr.net/npm/ethers@5.7.2/dist/ethers.umd.min.js"></script>
+  <!-- WalletConnect v2 Provider -->
+  <script src="https://cdn.jsdelivr.net/npm/@walletconnect/web3-provider@2.0.0/dist/umd/index.min.js"></script>
+  <style>
+    /* Desain futuristik sederhana */
+    body {
+      background-color: #000;
+      color: #fff;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      margin: 0;
+      padding: 0;
+      text-align: center;
+    }
+    header {
+      padding: 20px;
+      font-size: 2rem;
+      font-weight: bold;
+    }
+    .container {
+      padding: 20px;
+    }
+    .button {
+      padding: 15px 25px;
+      font-size: 1.2rem;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+      margin: 10px;
+      transition: 0.3s ease;
+    }
+    .play-button {
+      background-color: #ff007f; /* neon pink */
+      color: #fff;
+    }
+    .joined-button {
+      background-color: #39ff14; /* neon green */
+      color: #000;
+    }
+    .claim-button {
+      background-color: #39ff14; /* green untuk pemenang */
+      color: #000;
+    }
+    .claim-button.disabled {
+      background-color: #ff073a; /* merah untuk non-pemenang */
+      color: #fff;
+      cursor: not-allowed;
+    }
+    .share-button {
+      background-color: #1e90ff;
+      color: #fff;
+    }
+    .info-box {
+      border: 1px solid #444;
+      padding: 15px;
+      margin: 10px auto;
+      width: 90%;
+      max-width: 500px;
+      border-radius: 5px;
+    }
+    .countdown {
+      font-size: 2rem;
+      color: #00f; /* biru neon */
+    }
+    #walletAddress {
+      margin-top: 10px;
+      font-size: 0.9rem;
+      color: #ccc;
+    }
+  </style>
+</head>
+<body>
+  <header>SOCIAL LUCK</header>
+  <div class="container">
+    <!-- Tombol untuk connect wallet -->
+    <button id="connectWalletBtn" class="button play-button">Connect Wallet</button>
+    <div id="walletAddress"></div>
+    
+    <!-- Info Ronde -->
+    <div class="info-box">
+      <div id="roundInfo">Loading round info...</div>
+      <div class="countdown" id="timer">00:00:00</div>
+      <div id="prizeInfo">Prize Pool: 0</div>
+    </div>
+    
+    <!-- Tombol Join / Already Joined -->
+    <button id="joinBtn" class="button play-button">Join Round</button>
+    
+    <!-- Tombol Claim -->
+    <button id="claimBtn" class="button claim-button disabled" disabled>Claim Prize</button>
+    
+    <!-- Info Pemenang Terakhir -->
+    <div class="info-box" id="lastWinnerInfo">No winner yet</div>
+    
+    <!-- Tombol Share -->
+    <button id="shareBtn" class="button share-button">Share</button>
+  </div>
+
+  <script>
+    /***********************
+     * Konfigurasi Frontend
+     ***********************/
+    // Alamat kontrak yang sudah kamu deploy
+    const CONTRACT_ADDRESS = "0xD8D8c0B6122909C9983C5bBAc70d5967A28196Ad";
+    // ABI kontrak (sesuaikan dengan ABI kontrak SocialLuckLottery)
+    const CONTRACT_ABI = [
+      {
+        "inputs": [],
+        "name": "joinLottery",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function"
+      },
+      {
+        "inputs": [
+          {"internalType": "uint256", "name": "roundNumber", "type": "uint256"}
+        ],
+        "name": "drawWinner",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function"
+      },
+      {
+        "inputs": [
+          {"internalType": "uint256", "name": "roundNumber", "type": "uint256"}
+        ],
+        "name": "claimPrize",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function"
+      },
+      {
+        "inputs": [
+          {"internalType": "uint256", "name": "roundNumber", "type": "uint256"}
+        ],
+        "name": "getRoundInfo",
+        "outputs": [
+          {"internalType": "uint256", "name": "roundNum", "type": "uint256"},
+          {"internalType": "uint256", "name": "startTime", "type": "uint256"},
+          {"internalType": "uint256", "name": "endTime", "type": "uint256"},
+          {"internalType": "uint256", "name": "playerCount", "type": "uint256"},
+          {"internalType": "bool", "name": "drawn", "type": "bool"},
+          {"internalType": "address", "name": "winner", "type": "address"},
+          {"internalType": "uint256", "name": "prize", "type": "uint256"},
+          {"internalType": "bool", "name": "claimed", "type": "bool"}
+        ],
+        "stateMutability": "view",
+        "type": "function"
+      }
+    ];
+
+    // Variabel global
+    let provider;
+    let signer;
+    let contract;
+    let userAddress = null;
+    let joined = false;
+    let currentRoundNumber = 0;
+    let roundEndTime = 0;
+    let isWinner = false;
+
+    /***********************
+     * Inisialisasi WalletConnect v2
+     ***********************/
+    async function initWalletConnect() {
+      // Gunakan projectId yang kamu miliki
+      const wcProvider = new WalletConnectProvider.default({
+        projectId: "ec3a4a130bfbfcd23c9e540a8e99e718", // Project ID dari WalletConnect
+        // Ganti chains: [8453] jika menggunakan Base Mainnet, atau sesuaikan jika pakai jaringan lain
+        chains: [8453],
+        optionalChains: [1],
+        showQrModal: true,
+      });
+      
+      // Enable session (akan memunculkan QR Code atau langsung connect di mobile)
+      await wcProvider.enable();
+      provider = new ethers.providers.Web3Provider(wcProvider);
+      signer = provider.getSigner();
+      userAddress = await signer.getAddress();
+      document.getElementById("walletAddress").innerText = "Connected: " + userAddress;
+      
+      // Inisialisasi kontrak
+      contract = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, signer);
+      
+      // Update UI
+      updateUI();
+    }
+
+    document.getElementById("connectWalletBtn").addEventListener("click", async () => {
+      try {
+        await initWalletConnect();
+      } catch (error) {
+        console.error("Wallet connect error:", error);
+      }
+    });
+
+    /***********************
+     * Fungsi Join Round
+     ***********************/
+    document.getElementById("joinBtn").addEventListener("click", async () => {
+      if (!contract) {
+        alert("Please connect your wallet first.");
+        return;
+      }
+      if (joined) {
+        alert("You have already joined this round.");
+        return;
+      }
+      try {
+        const tx = await contract.joinLottery();
+        await tx.wait();
+        alert("Successfully joined the round!");
+        joined = true;
+        updateUI();
+      } catch (error) {
+        console.error(error);
+        alert("Error while joining the round.");
+      }
+    });
+
+    /***********************
+     * Fungsi Claim Prize
+     ***********************/
+    document.getElementById("claimBtn").addEventListener("click", async () => {
+      if (!contract) {
+        alert("Please connect your wallet first.");
+        return;
+      }
+      // Pastikan pemenang dan belum diklaim
+      if (!isWinner) {
+        alert("You are not the winner for this round.");
+        return;
+      }
+      try {
+        // Panggil claimPrize dengan nomor ronde yang sesuai (currentRound - 1)
+        const tx = await contract.claimPrize(currentRoundNumber - 1);
+        await tx.wait();
+        alert("Prize claimed successfully!");
+        updateUI();
+      } catch (error) {
+        console.error(error);
+        alert("Error claiming prize.");
+      }
+    });
+
+    /***********************
+     * Fungsi Share
+     ***********************/
+    document.getElementById("shareBtn").addEventListener("click", () => {
+      const shareData = {
+        title: 'SOCIAL LUCK',
+        text: 'Join the Social Luck lottery! Check it out.',
+        url: window.location.href,
+      };
+      if (navigator.share) {
+        navigator.share(shareData).catch(console.error);
+      } else {
+        navigator.clipboard.writeText(window.location.href);
+        alert("Link copied to clipboard!");
+      }
+    });
+
+    /***********************
+     * Update UI dan Data Ronde
+     ***********************/
+    async function updateUI() {
+      if (!contract) return;
+      try {
+        // Ambil info ronde saat ini dari kontrak
+        const roundNumber = await contract.currentRound();
+        // Karena di kontrak currentRound sudah diincrement, ronde aktif adalah roundNumber - 1
+        currentRoundNumber = roundNumber.toNumber();
+        const roundInfo = await contract.getRoundInfo(currentRoundNumber - 1);
+        // roundInfo: [roundNum, startTime, endTime, playerCount, drawn, winner, prize, claimed]
+        const [rNum, startTime, endTime, playerCount, drawn, winner, prize, claimed] = roundInfo;
+        roundEndTime = endTime.toNumber();
+        
+        // Update tampilan info ronde
+        document.getElementById("roundInfo").innerText = "Round: " + (currentRoundNumber - 1) +
+          " | Players: " + playerCount +
+          " | Drawn: " + drawn;
+        document.getElementById("prizeInfo").innerText = "Prize Pool: " + ethers.utils.formatUnits(prize, 18) + " TOKEN";
+
+        // Update tombol Join
+        if (joined) {
+          document.getElementById("joinBtn").innerText = "Already Joined";
+          document.getElementById("joinBtn").className = "button joined-button";
+          document.getElementById("joinBtn").disabled = true;
+        } else {
+          document.getElementById("joinBtn").innerText = "Join Round";
+          document.getElementById("joinBtn").className = "button play-button";
+          document.getElementById("joinBtn").disabled = false;
+        }
+
+        // Cek apakah user adalah pemenang (bandingkan address secara case-insensitive)
+        if (drawn && userAddress && (winner.toLowerCase() === userAddress.toLowerCase())) {
+          isWinner = true;
+          document.getElementById("claimBtn").className = "button claim-button";
+          document.getElementById("claimBtn").disabled = false;
+        } else {
+          isWinner = false;
+          document.getElementById("claimBtn").className = "button claim-button disabled";
+          document.getElementById("claimBtn").disabled = true;
+        }
+
+        // Update info pemenang ronde sebelumnya (jika ada)
+        if (drawn) {
+          document.getElementById("lastWinnerInfo").innerText = "Last Winner: " + winner +
+            "\nPrize: " + ethers.utils.formatUnits(prize, 18) + " TOKEN";
+        } else {
+          document.getElementById("lastWinnerInfo").innerText = "No winner yet";
+        }
+      } catch (error) {
+        console.error("Error updateUI:", error);
+      }
+    }
+
+    /***********************
+     * Countdown Timer
+     ***********************/
+    function updateTimer() {
+      if (roundEndTime === 0) return;
+      const now = Math.floor(Date.now() / 1000);
+      let diff = roundEndTime - now;
+      if (diff < 0) diff = 0;
+      const hours = String(Math.floor(diff / 3600)).padStart(2, '0');
+      const minutes = String(Math.floor((diff % 3600) / 60)).padStart(2, '0');
+      const seconds = String(diff % 60).padStart(2, '0');
+      document.getElementById("timer").innerText = hours + ":" + minutes + ":" + seconds;
+    }
+
+    // Update UI dan timer setiap 3 detik
+    setInterval(() => {
+      updateUI();
+      updateTimer();
+    }, 3000);
+  </script>
+</body>
+</html>
